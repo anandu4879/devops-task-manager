@@ -1,0 +1,79 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write   # required for OIDC
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: task-manager
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    outputs:
+      image_uri: ${{ steps.build.outputs.image_uri }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image
+        id: build
+        working-directory: app
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+        run: |
+          IMAGE_URI="$REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}"
+          docker build -t "$IMAGE_URI" .
+          docker push "$IMAGE_URI"
+          echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy to EC2 over SSM (no open SSH port needed)
+        env:
+          IMAGE_URI: ${{ needs.build-and-push.outputs.image_uri }}
+          INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
+        run: |
+          aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters '{"commands":[
+              "aws ecr get-login-password --region '"$AWS_REGION"' | docker login --username AWS --password-stdin '"${IMAGE_URI%%/*}"'",
+              "docker pull '"$IMAGE_URI"'",
+              "docker stop task-manager || true",
+              "docker rm task-manager || true",
+              "docker run -d --name task-manager -p 80:5000 -v task-data:/data --restart unless-stopped '"$IMAGE_URI"'"
+            ]}' \
+            --comment "Deploy task-manager ${{ env.IMAGE_TAG }}"
+
+      - name: Health check
+        env:
+          APP_URL: ${{ secrets.APP_HEALTH_URL }}
+        run: |
+          sleep 15
+          curl --fail "$APP_URL/health"
