@@ -6,26 +6,8 @@ AWS infrastructure → EC2, deployed with zero long-lived AWS credentials via OI
 
 ## Architecture
 
-```
-Developer → git push → GitHub Actions (CI: lint, test, build)
-                              │
-                        (on merge to main)
-                              ▼
-                    GitHub Actions (CD)
-                    │  assumes AWS IAM role via OIDC (no static keys)
-                    ▼
-              Build & push Docker image → Amazon ECR
-                              │
-                              ▼
-            AWS SSM Send-Command → EC2 instance
-            (pulls new image, restarts container)
-                              │
-                              ▼
-                   Flask app live on port 80
-                   Infra provisioned by Terraform:
-                   VPC, subnet, security group, EC2,
-                   ECR repo, IAM roles (S3+DynamoDB state)
-```
+<img width="2760" height="1504" alt="daigram2 (1)" src="https://github.com/user-attachments/assets/f737d43f-845b-4a8e-92db-654ab9a84ba8" />
+
 
 ## Why these choices
 
@@ -56,14 +38,14 @@ curl -X POST http://localhost:5000/tasks -H "Content-Type: application/json" -d 
 ```bash
 cd app
 docker build -t task-manager .
-docker run -p 5000:5000 -v task-data:/data task-manager
-curl http://localhost:5000/health
+docker run -p 5001:5001 -v task-data:/data task-manager
+curl http://localhost:5001/health
 ```
 
 ## Deploying to AWS
 
 ### 1. Bootstrap remote state (one-time, manual)
-Create an S3 bucket and DynamoDB table for Terraform state (console or CLI),
+Create an S3 bucket for Terraform state (console or CLI),
 then uncomment the `backend "s3" {}` block in `terraform/versions.tf` with your
 bucket name.
 
@@ -89,27 +71,14 @@ The `deploy.yml` workflow builds, pushes to ECR, and deploys automatically.
 terraform destroy -var="github_repo=yourusername/your-repo-name"
 ```
 
-## Cost
+## Terraform Daigram
 
-Everything here fits comfortably in the AWS Free Tier (EC2 t3.micro, ECR under
-500MB, S3/DynamoDB at this scale). Run `terraform destroy` after you've taken
-your screenshots and demoed it so nothing keeps billing.
+<img width="1408" height="768" alt="12- terrafom archi" src="https://github.com/user-attachments/assets/38d0a552-b392-42fa-a0b1-92ba3eeb475c" />
 
-## Screenshot checklist (for LinkedIn / portfolio)
+## Docker running in the container
+<img width="1440" height="816" alt="10-docker image" src="https://github.com/user-attachments/assets/f03e3189-7875-4ecb-843b-817ca8594890" />
 
-1. GitHub repo structure (`app/`, `terraform/`, `.github/workflows/`)
-2. Branch protection rule settings page
-3. `docker build` + `docker run` + curl output in terminal
-4. GitHub Actions — green CI run, pipeline graph view
-5. `terraform plan` output (resource creation summary)
-6. AWS Console — ECR repo showing pushed image
-7. AWS Console — running EC2 instance
-8. Live app response (browser or curl hitting the public IP)
-9. CloudWatch/SSM command output confirming deploy
-10. Architecture diagram (see below)
+## Status OK screenshot
+<img width="1440" height="816" alt="11-health" src="https://github.com/user-attachments/assets/5f096c61-93c8-46bc-ae2e-131f7d0bafa1" />
 
-## Roadmap (future iterations)
 
-- Staging vs. production environments via Terraform workspaces
-- CloudWatch alarms on failed deploys
-- Secrets via AWS Secrets Manager
